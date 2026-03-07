@@ -29,3 +29,12 @@ inputs:
     values:
       - half-year
       - full-year
+
+  plugin_isocalendar_max_commits:
+    description: |
+      Cap the maximum number of commits used for column height scaling.
+
+      Days with commits above this value will all render at full height.
+      Set to `0` to disable capping and use the actual maximum.
+    type: number
+    default: 0
