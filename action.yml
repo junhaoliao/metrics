@@ -266,6 +266,10 @@ inputs:
     description: Time range
     default: <default-value>
 
+  plugin_isocalendar_max_commits:
+    description: Cap the maximum number of commits used for column height scaling
+    default: <default-value>
+
   # ====================================================================================
   # 🈷️ Languages activity
 
