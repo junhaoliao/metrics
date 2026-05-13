@@ -59,6 +59,19 @@ All product and company names are trademarks™ or registered® trademarks of th
 <b>default:</b> half-year<br>
 <b>allowed values:</b><ul><li>half-year</li><li>full-year</li></ul></td>
   </tr>
+  <tr>
+    <td nowrap="nowrap"><h4><code>plugin_isocalendar_max_commits</code></h4></td>
+    <td rowspan="2"><p>Cap the maximum number of commits used for column height scaling.</p>
+<p>Days with commits above this value will all render at full height.
+Set to <code>0</code> to disable capping and use the actual maximum.</p>
+<img width="900" height="1" alt=""></td>
+  </tr>
+  <tr>
+    <td nowrap="nowrap">✨ On <code>master</code>/<code>main</code><br>
+<b>type:</b> <code>number</code>
+<br>
+<b>default:</b> 0<br></td>
+  </tr>
 </table>
 <!--/options-->
 
