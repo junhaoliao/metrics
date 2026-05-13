@@ -70,7 +70,7 @@ else
   echo "Using a forked version"
   # Try pulling pre-built image from fork's GHCR registry
   if [[ ! $METRICS_USE_PREBUILT_IMAGE =~ ^([Ff]alse|[Oo]ff|[Nn]o|0)$ ]]; then
-    METRICS_IMAGE=ghcr.io/$METRICS_SOURCE/metrics:$METRICS_TAG-beta
+    METRICS_IMAGE=ghcr.io/$METRICS_SOURCE/metrics:latest
     echo "Trying pre-built image from fork registry: $METRICS_IMAGE"
     if ! docker image pull $METRICS_IMAGE; then
       echo "Failed to fetch pre-built image from fork registry, will rebuild it locally"
