@@ -101,7 +101,7 @@ if (mode === "publish") {
     .addConfig("user.email", "41898282+github-actions[bot]@users.noreply.github.com")
     .add([...staged])
     .commit("ci: auto-regenerate files")
-    .push("origin", "master")
+    .push("origin", "main")
   console.log(gitted)
 }
 console.log("Success!")
