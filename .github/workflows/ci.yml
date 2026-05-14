@@ -41,8 +41,10 @@ jobs:
           set -e
 
   # Update plugins and template indexes, along with README.md
+  # NOTE: Skipped — npm ci on this repo exceeds 6h GitHub Actions limit
   update-indexes:
     name: Publish rebuilt metrics indexes
+    if: false
     runs-on: ubuntu-latest
     needs: [ format ]
     steps:
@@ -68,7 +70,7 @@ jobs:
     name: Publish to GitHub registry
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [ update-indexes ]
+    needs: [ format ]
     permissions:
       packages: write
     steps:
