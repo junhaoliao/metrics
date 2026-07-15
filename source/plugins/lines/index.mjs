@@ -59,7 +59,8 @@ export default async function({login, data, imports, rest, q, account}, {enabled
           weeks[date].deleted += d
           weeks[date].changed += c
         })
-        console.debug(`metrics/compute/${login}/plugins > lines > ${handle}: @${contributor.author.login} +${added} -${deleted} ~${changed}`)
+        const contributorHandle = contributor.author?.login ? `@${contributor.author.login}` : "(unknown author)"
+        console.debug(`metrics/compute/${login}/plugins > lines > ${handle}: ${contributorHandle} +${added} -${deleted} ~${changed}`)
         repos[handle].added += added
         repos[handle].deleted += deleted
         repos[handle].changed += changed

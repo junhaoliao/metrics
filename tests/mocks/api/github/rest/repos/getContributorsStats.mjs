@@ -22,6 +22,13 @@ export default async function({faker}, target, that, [{owner, repo}]) {
           login: owner,
         },
       },
+      {
+        total: faker.number.int(10000),
+        weeks: [
+          {w: faker.date.recent(), a: faker.number.int(10000), d: faker.number.int(10000), c: faker.number.int(10000)},
+        ],
+        author: null,
+      },
     ],
   })
 }
