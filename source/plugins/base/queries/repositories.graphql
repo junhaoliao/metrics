@@ -1,6 +1,10 @@
 query BaseRepositories {
   $account(login: "$login") {
     $type($after first: $repositories $forks $affiliations $constraints, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
       edges {
         cursor
       }

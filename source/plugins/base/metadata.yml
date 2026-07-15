@@ -81,7 +81,7 @@ inputs:
       If you receive `Something went wrong while executing your query` (which is usually caused by API timeouts), lowering this value may help.
       This setting may not be supported by all plugins.
     type: number
-    default: 100
+    default: 25
     max: 100
     min: 1
 

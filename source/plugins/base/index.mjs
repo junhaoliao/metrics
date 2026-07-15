@@ -33,7 +33,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
       Object.assign(data, {user: queried[account]})
       postprocess?.[account]({login, data})
       try {
-        Object.assign(data.user, (await graphql(queries.base[`${account}.x`]({login, account, "calendar.from": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), "calendar.to": (new Date()).toISOString(), affiliations})))[account])
+        Object.assign(data.user, (await graphql(queries.base[`${account}.x`]({login, account, "calendar.from": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), "calendar.to": (new Date()).toISOString(), affiliations, forks})))[account])
         console.debug(`metrics/compute/${login}/base > successfully loaded bulk query`)
       }
       catch {
@@ -55,7 +55,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
         //Query repositories fields
         for (const field of ["totalCount", "totalDiskUsage"]) {
           try {
-            Object.assign(data.user.repositories, (await graphql(queries.base["field.repositories"]({login, account, field, affiliations})))[account].repositories)
+            Object.assign(data.user.repositories, (await graphql(queries.base["field.repositories"]({login, account, field, affiliations, forks})))[account].repositories)
           }
           catch (error) {
             console.debug(`metrics/compute/${login}/base > failed to retrieve repositories.${field}`)
@@ -145,36 +145,42 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
       for (const type of ({user: ["repositories", "repositoriesContributedTo"], organization: ["repositories"]}[account] ?? [])) {
         //Iterate through repositories
         let cursor = null
-        let pushed = 0
         const options = {repositories: {forks, affiliations, constraints: ""}, repositoriesContributedTo: {forks: "", affiliations: "", constraints: ", includeUserRepositories: false, contributionTypes: COMMIT"}}[type] ?? null
         data.user[type] = data.user[type] ?? {}
         data.user[type].nodes = data.user[type].nodes ?? []
-        do {
+        const total = Number(data.user[type].totalCount)
+        const knownTotal = type === "repositories" && Number.isFinite(total)
+        const target = knownTotal ? Math.min(repositories, total) : repositories
+        while (data.user[type].nodes.length < target) {
+          const requested = Math.min(target - data.user[type].nodes.length, {user: _batch, organization: Math.min(25, _batch)}[account])
           console.debug(`metrics/compute/${login}/base > retrieving ${type} after ${cursor}`)
-          const request = {}
+          let connection
           try {
-            Object.assign(request, await graphql(queries.base.repositories({login, account, type, after: cursor ? `after: "${cursor}"` : "", repositories: Math.min(repositories, {user: _batch, organization: Math.min(25, _batch)}[account]), ...options})))
+            const request = await graphql(queries.base.repositories({login, account, type, after: cursor ? `after: "${cursor}"` : "", repositories: requested, ...options}))
+            connection = request?.[account]?.[type]
+            if (!connection)
+              throw new Error(`Missing ${account}.${type} in GraphQL response`)
+            if ((!connection.nodes?.length) && (knownTotal) && (data.user[type].nodes.length < target))
+              throw new Error(`Unexpected empty ${account}.${type} in GraphQL response`)
           }
           catch (error) {
-            console.debug(`metrics/compute/${login}/base > failed to retrieve ${_batch} repositories after ${cursor}, this is probably due to an API timeout, halving batch`)
-            _batch = Math.floor(_batch / 2)
+            console.debug(`metrics/compute/${login}/base > failed to retrieve ${requested} repositories after ${cursor}, this is probably due to an API timeout, halving batch`)
+            _batch = Math.floor(requested / 2)
             if (_batch < 1) {
               console.debug(`metrics/compute/${login}/base > failed to retrieve repositories, cannot halve batch anymore`)
               throw error
             }
             continue
           }
-          const {[account]: {[type]: {edges = [], nodes = []} = {}}} = request
-          cursor = edges?.[edges?.length - 1]?.cursor
+          const {edges = [], nodes = [], pageInfo = {}} = connection
+          cursor = pageInfo.endCursor ?? edges?.[edges?.length - 1]?.cursor
           data.user[type].nodes.push(...nodes)
-          pushed = nodes.length
-          console.debug(`metrics/compute/${login}/base > retrieved ${pushed} ${type} after ${cursor}`)
-          if (pushed < repositories) {
+          console.debug(`metrics/compute/${login}/base > retrieved ${nodes.length} ${type} after ${cursor}`)
+          if ((pageInfo.hasNextPage === false) || (!cursor) || ((pageInfo.hasNextPage !== true) && (nodes.length < requested))) {
             console.debug(`metrics/compute/${login}/base > retrieved less repositories than expected, probably no more to fetch`)
             break
           }
         }
-        while ((pushed) && (cursor) && ((data.user.repositories?.nodes?.length ?? 0) + (data.user.repositoriesContributedTo?.nodes?.length ?? 0) < repositories))
         //Limit repositories
         console.debug(`metrics/compute/${login}/base > keeping only ${repositories} ${type}`)
         data.user[type].nodes.splice(repositories)

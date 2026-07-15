@@ -127,7 +127,7 @@ This setting may not be supported by all plugins.</p>
 𝑥
 ≤ 100)</i>
 <br>
-<b>default:</b> 100<br></td>
+<b>default:</b> 25<br></td>
   </tr>
   <tr>
     <td nowrap="nowrap"><h4><code>repositories_forks</code></h4></td>

@@ -10,6 +10,10 @@ export default function({faker, query, login = faker.internet.userName()}) {
         repositories: {
           edges: [],
           nodes: [],
+          pageInfo: {
+            endCursor: null,
+            hasNextPage: false,
+          },
         },
       },
     })
@@ -24,6 +28,10 @@ export default function({faker, query, login = faker.internet.userName()}) {
               cursor: "MOCKED_CURSOR",
             },
           ],
+          pageInfo: {
+            endCursor: "MOCKED_CURSOR",
+            hasNextPage: true,
+          },
           nodes: [
             {
               name: faker.lorem.words(),
