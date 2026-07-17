@@ -3,10 +3,18 @@
 <div class="stdout"><%# -%>
 <% if (base.activity) { -%>
 <b>Recent activity</b>
+<% if (Number.isFinite(computed.commits)) { -%>
   <b><%= `${computed.commits}`.padStart(5) %></b> commit<%= s(computed.commits) %>
+<% } -%>
+<% if (Number.isFinite(user.contributionsCollection.totalPullRequestReviewContributions)) { -%>
   <b><%= `${user.contributionsCollection.totalPullRequestReviewContributions}`.padStart(5) %></b> pull request<%= s(user.contributionsCollection.totalPullRequestReviewContributions) %> reviewed
+<% } -%>
+<% if (Number.isFinite(user.contributionsCollection.totalPullRequestContributions)) { -%>
   <b><%= `${user.contributionsCollection.totalPullRequestContributions}`.padStart(5) %></b> pull request<%= s(user.contributionsCollection.totalPullRequestContributions) %> opened
+<% } -%>
+<% if (Number.isFinite(user.contributionsCollection.totalIssueContributions)) { -%>
   <b><%= `${user.contributionsCollection.totalIssueContributions}`.padStart(5) %></b> issue<%= s(user.contributionsCollection.totalIssueContributions) %> opened
+<% } -%>
   <b><%= `${user.issueComments.totalCount}`.padStart(5) %></b> issue comment<%= s(user.issueComments.totalCount) %>
 <% } -%>
 <% if ((base.activity)&&(base.community)) { -%>

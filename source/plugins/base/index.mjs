@@ -4,7 +4,10 @@
  */
 
 //Imports
-import {isSecondaryRateLimit} from "../../app/retry.mjs"
+import {isGraphqlResourceLimit, isSecondaryRateLimit} from "../../app/retry.mjs"
+
+const CONTRIBUTION_FIELDS = ["totalRepositoriesWithContributedCommits", "totalCommitContributions", "restrictedContributionsCount", "totalIssueContributions", "totalPullRequestContributions", "totalPullRequestReviewContributions"]
+const CONTRIBUTION_WINDOW = 24 * 7 * 24 * 60 * 60 * 1000
 
 //Setup
 export default async function({login, graphql, rest, data, q, queries, imports, callbacks}, conf) {
@@ -74,20 +77,6 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
         }
         //Query user account fields
         if (account === "user") {
-          //Query contributions collection
-          {
-            const fields = ["totalRepositoriesWithContributedCommits", "totalCommitContributions", "restrictedContributionsCount", "totalIssueContributions", "totalPullRequestContributions", "totalPullRequestReviewContributions"]
-            try {
-              Object.assign(data.user.contributionsCollection, (await graphql(queries.base.contributions({login, account, field: fields.join("\n"), range: ""})))[account].contributionsCollection)
-            }
-            catch (error) {
-              if (isSecondaryRateLimit(error))
-                throw error
-              console.debug(`metrics/compute/${login}/base > failed to retrieve contributionsCollection fields`)
-              for (const field of fields)
-                data.user.contributionsCollection[field] = NaN
-            }
-          }
           //Query calendar
           try {
             Object.assign(data.user, (await graphql(queries.base.calendar({login, "calendar.from": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), "calendar.to": (new Date()).toISOString()})))[account])
@@ -108,55 +97,34 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
         catch (error) {
           if (isSecondaryRateLimit(error))
             throw error
-          repositoriesContributedUnavailable = isRepositoryResourceLimit(error)
+          repositoriesContributedUnavailable = isGraphqlResourceLimit(error)
           console.debug(`metrics/compute/${login}/base > failed to retrieve repositoriesContributedTo.totalCount`)
           data.user.repositoriesContributedTo.totalCount = NaN
         }
       }
-      //Query contributions collection over account lifetime instead of last year
+      //Query contributions in bounded date windows because GitHub can reject an unbounded collection on large accounts
       if (account === "user") {
-        if ((indepth) && (imports.metadata.plugins.base.extras("indepth", {...conf.settings, error: false}))) {
-          const fields = ["totalRepositoriesWithContributedCommits", "totalCommitContributions", "restrictedContributionsCount", "totalIssueContributions", "totalPullRequestContributions", "totalPullRequestReviewContributions"]
-          const start = new Date(data.user.createdAt)
-          const end = new Date()
-          const collection = Object.fromEntries(fields.map(field => [field, 0]))
-          //Load contribution calendar
-          for (let from = new Date(start); from < end;) {
-            //Set date range
-            let to = new Date(from)
-            to.setUTCHours(+6 * 4 * 7 * 24)
-            if (to > end)
-              to = end
-            //Ensure that date ranges are not overlapping by setting it to previous day at 23:59:59.999
-            const dto = new Date(to)
-            dto.setUTCHours(-1)
-            dto.setUTCMinutes(59)
-            dto.setUTCSeconds(59)
-            dto.setUTCMilliseconds(999)
-            //Fetch all contribution fields from the same date window
-            try {
-              console.debug(`metrics/compute/${login}/plugins > base > loading contributions collections from "${from.toISOString()}" to "${dto.toISOString()}"`)
-              const {[account]: {contributionsCollection}} = await graphql(queries.base.contributions({login, account, field: fields.join("\n"), range: `(from: "${from.toISOString()}", to: "${dto.toISOString()}")`}))
-              for (const field of fields)
-                collection[field] += contributionsCollection[field]
-            }
-            catch (error) {
-              if (isSecondaryRateLimit(error))
-                throw error
-              console.debug(`metrics/compute/${login}/plugins > base > failed to load contributions collections from "${from.toISOString()}" to "${dto.toISOString()}"`)
-            }
-            //Set next date range start
-            from = new Date(to)
-          }
-          for (const field of fields)
-            data.user.contributionsCollection[field] = Math.max(collection[field], data.user.contributionsCollection[field])
+        const indepthEnabled = (indepth) && (imports.metadata.plugins.base.extras("indepth", {...conf.settings, error: false}))
+        const end = new Date()
+        const oneYearAgo = new Date(end)
+        oneYearAgo.setUTCFullYear(oneYearAgo.getUTCFullYear() - 1)
+        const created = new Date(data.user.createdAt)
+        const start = indepthEnabled || (created > oneYearAgo) ? created : oneYearAgo
+        try {
+          Object.assign(data.user.contributionsCollection, await loadContributions({login, account, graphql, query: queries.base.contributions, start, end}))
+        }
+        catch (error) {
+          if (isSecondaryRateLimit(error))
+            throw error
+          console.debug(`metrics/compute/${login}/plugins > base > failed to load bounded contributions collections`)
         }
         //Fallback to load whole commit history rather than last year
-        else {
+        if (!indepthEnabled) {
           try {
             console.debug(`metrics/compute/${login}/base > loading user commits history`)
             const {data: {total_count: total = 0}} = await rest.search.commits({q: `author:${login}`})
-            data.user.contributionsCollection.totalCommitContributions = Math.max(total, data.user.contributionsCollection.totalCommitContributions)
+            const current = data.user.contributionsCollection.totalCommitContributions
+            data.user.contributionsCollection.totalCommitContributions = Math.max(total, Number.isFinite(current) ? current : 0)
           }
           catch {
             console.debug(`metrics/compute/${login}/base > falling back to last year commits history`)
@@ -200,7 +168,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
             console.debug(`metrics/compute/${login}/base > received an empty, timed out, or resource-limited response while retrieving ${requested} repositories after ${cursor}, halving batch`)
             const reduced = Math.floor(requested / 2)
             if (reduced < 1) {
-              if ((type === "repositoriesContributedTo") && (isRepositoryResourceLimit(error))) {
+              if ((type === "repositoriesContributedTo") && (isGraphqlResourceLimit(error))) {
                 console.debug(`metrics/compute/${login}/base > repositoriesContributedTo remains unavailable with a batch of 1, skipping`)
                 break
               }
@@ -267,11 +235,43 @@ function shouldShrinkRepositoryBatch(error) {
   const status = Number(error?.status ?? error?.response?.status)
   if ([403, 429].includes(status))
     return false
-  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`) || isRepositoryResourceLimit(error)
+  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`) || isGraphqlResourceLimit(error)
 }
 
-function isRepositoryResourceLimit(error) {
-  return error?.errors?.some(({type, message}) => (type === "RESOURCE_LIMITS_EXCEEDED") || /resource limits? for this query exceeded/i.test(message)) || /resource limits? for this query exceeded/i.test(error?.message)
+async function loadContributions({login, account, graphql, query, start, end}) {
+  const collection = Object.fromEntries(CONTRIBUTION_FIELDS.map(field => [field, 0]))
+  for (let from = new Date(start); from < end;) {
+    const next = new Date(Math.min(from.getTime() + CONTRIBUTION_WINDOW, end.getTime()))
+    const to = new Date(next.getTime() - 1)
+    const contribution = await loadContributionRange({login, account, graphql, query, from, to})
+    for (const field of CONTRIBUTION_FIELDS)
+      collection[field] += contribution[field]
+    from = next
+  }
+  return collection
+}
+
+async function loadContributionRange({login, account, graphql, query, from, to}) {
+  try {
+    console.debug(`metrics/compute/${login}/plugins > base > loading contributions collections from "${from.toISOString()}" to "${to.toISOString()}"`)
+    const response = await graphql(query({login, account, field: CONTRIBUTION_FIELDS.join("\n"), range: `(from: "${from.toISOString()}", to: "${to.toISOString()}")`}))
+    const contribution = response?.[account]?.contributionsCollection
+    if ((!contribution) || (CONTRIBUTION_FIELDS.some(field => !Number.isFinite(contribution[field]))))
+      throw new Error("Incomplete contributions collection response")
+    return contribution
+  }
+  catch (error) {
+    if (isSecondaryRateLimit(error))
+      throw error
+    const duration = to.getTime() - from.getTime()
+    if ((!isGraphqlResourceLimit(error)) || (duration < 2 * 24 * 60 * 60 * 1000))
+      throw error
+    const midpoint = new Date(from.getTime() + Math.ceil(duration / 2))
+    console.debug(`metrics/compute/${login}/plugins > base > contribution range exceeded GitHub resource limits, splitting at "${midpoint.toISOString()}"`)
+    const left = await loadContributionRange({login, account, graphql, query, from, to: new Date(midpoint.getTime() - 1)})
+    const right = await loadContributionRange({login, account, graphql, query, from: midpoint, to})
+    return Object.fromEntries(CONTRIBUTION_FIELDS.map(field => [field, left[field] + right[field]]))
+  }
 }
 
 //Query post-processing
@@ -285,7 +285,7 @@ const postprocess = {
       isVerified: false,
       repositories: {},
       repositoriesContributedTo: {totalCount: NaN, nodes: []},
-      contributionsCollection: {},
+      contributionsCollection: Object.fromEntries(CONTRIBUTION_FIELDS.map(field => [field, NaN])),
     })
   },
   //Organization

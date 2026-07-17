@@ -103,7 +103,8 @@ export default async function({login, q}, {conf, data, rest, graphql, plugins, q
   computed.licenses.favorite = Object.entries(computed.licenses.used).sort(([_an, a], [_bn, b]) => b - a).slice(0, 1).map(([name, _value]) => name) ?? ""
 
   //Compute total commits
-  computed.commits += data.user.contributionsCollection.totalCommitContributions + data.user.contributionsCollection.restrictedContributionsCount
+  const commitCounts = [data.user.contributionsCollection.totalCommitContributions, data.user.contributionsCollection.restrictedContributionsCount]
+  computed.commits = commitCounts.every(Number.isFinite) ? commitCounts.reduce((total, value) => total + value, 0) : NaN
 
   //Compute registration date
   const now = Date.now()

@@ -31,14 +31,6 @@ query BaseUserX {
       totalCount
       totalDiskUsage
     }
-    contributionsCollection {
-      totalRepositoriesWithContributedCommits
-      totalCommitContributions
-      restrictedContributionsCount
-      totalIssueContributions
-      totalPullRequestContributions
-      totalPullRequestReviewContributions
-    }
     calendar:contributionsCollection(from: "$calendar.from", to: "$calendar.to") {
       contributionCalendar {
         weeks {

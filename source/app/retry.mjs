@@ -34,6 +34,12 @@ export function isSecondaryRateLimit(error) {
   return (status === 429) || ((status === 403) && ((retryAfter !== undefined) || /secondary rate limit|abuse detection/i.test(details)))
 }
 
+/**Check whether GitHub rejected a GraphQL field because resolving it was too expensive */
+export function isGraphqlResourceLimit(error) {
+  const errors = error?.errors ?? error?.response?.data?.errors ?? []
+  return errors.some(({type, message}) => (type === "RESOURCE_LIMITS_EXCEEDED") || /resource limits? for this query exceeded/i.test(message)) || /resource limits? for this query exceeded/i.test(error?.message)
+}
+
 /**Retry the same GraphQL request after a GitHub secondary rate limit */
 export function withGraphqlRetries(graphql, {retries = 2, sleep = wait, random = Math.random} = {}) {
   const wrapped = async function(...args) {

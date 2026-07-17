@@ -2,6 +2,14 @@ import assert from "node:assert/strict"
 import base from "../source/plugins/base/index.mjs"
 
 const login = "metrics-test"
+const CONTRIBUTION_FIELDS = [
+  "totalRepositoriesWithContributedCommits",
+  "totalCommitContributions",
+  "restrictedContributionsCount",
+  "totalIssueContributions",
+  "totalPullRequestContributions",
+  "totalPullRequestReviewContributions",
+]
 
 function repository(index) {
   return {
@@ -11,11 +19,12 @@ function repository(index) {
   }
 }
 
-async function loadRepositories({repositories, totalCount, emptyFirstPage = false, repositoryError = null, repositoryErrorType = null, repositoryErrorAlways = false, contributedCountError = null, contributionError = null, indepth = false}) {
+async function loadRepositories({repositories, totalCount, emptyFirstPage = false, repositoryError = null, repositoryErrorType = null, repositoryErrorAlways = false, contributedCountError = null, contributionError = null, contributionErrorOnce = false, indepth = false}) {
   const calls = []
   const contributionCalls = []
   let returnedEmptyPage = false
   let returnedRepositoryError = false
+  let returnedContributionError = false
   const data = {base: {}}
   const queries = {
     base: {
@@ -32,14 +41,6 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
     if (query.kind === "user.x") {
       return {
         user: {
-          contributionsCollection: {
-            totalRepositoriesWithContributedCommits: 0,
-            totalCommitContributions: 0,
-            restrictedContributionsCount: 0,
-            totalIssueContributions: 0,
-            totalPullRequestContributions: 0,
-            totalPullRequestReviewContributions: 0,
-          },
           packages: {totalCount: 0},
           repositories: {totalCount, totalDiskUsage: 0},
         },
@@ -51,8 +52,9 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
       return {user: {repositoriesContributedTo: {totalCount: 0}}}
     }
     if (query.kind === "contributions") {
-      contributionCalls.push(query.field)
-      if (contributionError) {
+      contributionCalls.push(query)
+      if ((contributionError) && ((!contributionErrorOnce) || (!returnedContributionError))) {
+        returnedContributionError = true
         contributionError.calls = contributionCalls
         throw contributionError
       }
@@ -201,16 +203,21 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
 }
 
 {
-  const fields = [
-    "totalRepositoriesWithContributedCommits",
-    "totalCommitContributions",
-    "restrictedContributionsCount",
-    "totalIssueContributions",
-    "totalPullRequestContributions",
-    "totalPullRequestReviewContributions",
-  ]
-  const {contributionCalls} = await loadRepositories({repositories: 1, totalCount: 1, indepth: true})
+  const {contributionCalls, data} = await loadRepositories({repositories: 1, totalCount: 1, indepth: true})
   assert.equal(contributionCalls.length, 1)
-  for (const field of fields)
-    assert.match(contributionCalls[0], new RegExp(`(^|\\n)${field}($|\\n)`))
+  for (const field of CONTRIBUTION_FIELDS)
+    assert.match(contributionCalls[0].field, new RegExp(`(^|\\n)${field}($|\\n)`))
+  assert.match(contributionCalls[0].range, /^\(from: /)
+  for (const field of CONTRIBUTION_FIELDS)
+    assert.equal(data.user.contributionsCollection[field], 1)
+}
+
+{
+  const error = Object.assign(new Error("Resource limits for this query exceeded."), {
+    errors: [{type: "RESOURCE_LIMITS_EXCEEDED"}],
+  })
+  const {contributionCalls, data} = await loadRepositories({repositories: 1, totalCount: 1, contributionError: error, contributionErrorOnce: true, indepth: true})
+  assert.equal(contributionCalls.length, 3)
+  for (const field of CONTRIBUTION_FIELDS)
+    assert.equal(data.user.contributionsCollection[field], 2)
 }

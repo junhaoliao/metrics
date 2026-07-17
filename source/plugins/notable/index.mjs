@@ -1,3 +1,6 @@
+//Imports
+import {isGraphqlResourceLimit} from "../../app/retry.mjs"
+
 //Setup
 export default async function({login, q, imports, rest, graphql, data, account, queries}, {enabled = false, extras = false} = {}) {
   //Plugin execution
@@ -17,7 +20,18 @@ export default async function({login, q, imports, rest, graphql, data, account, 
       let pushed = 0
       do {
         console.debug(`metrics/compute/${login}/plugins > notable > retrieving contributed repositories after ${cursor}`)
-        const {user: {repositoriesContributedTo: {edges}}} = await graphql(queries.notable.contributions({login, types: types.map(x => x.toLocaleUpperCase()).join(", "), after: cursor ? `after: "${cursor}"` : "", self, repositories: data.shared["repositories.batch"] || 100}))
+        let response
+        try {
+          response = await graphql(queries.notable.contributions({login, types: types.map(x => x.toLocaleUpperCase()).join(", "), after: cursor ? `after: "${cursor}"` : "", self, repositories: data.shared["repositories.batch"] || 100}))
+        }
+        catch (error) {
+          if (isGraphqlResourceLimit(error)) {
+            console.debug(`metrics/compute/${login}/plugins > notable > repositoriesContributedTo is unavailable due to GitHub query resource limits, skipping`)
+            return {contributions: [], types, unavailable: true}
+          }
+          throw error
+        }
+        const {user: {repositoriesContributedTo: {edges}}} = response
         cursor = edges?.[edges?.length - 1]?.cursor
         edges
           .filter(({node}) => imports.filters.repo(node, skipped))
