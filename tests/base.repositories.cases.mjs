@@ -163,6 +163,13 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
 }
 
 {
+  const error = new Error("Request failed due to following response errors: Resource limits for this query exceeded.")
+  const {calls, data} = await loadRepositories({repositories: 20, totalCount: 20, repositoryError: error})
+  assert.equal(data.user.repositories.nodes.length, 20)
+  assert.deepEqual(calls.filter(({type}) => type === "repositories").map(({size}) => size), [20, 10, 10])
+}
+
+{
   const error = Object.assign(new Error("You have exceeded a secondary rate limit"), {
     status: 403,
     response: {headers: {"retry-after": "60"}},

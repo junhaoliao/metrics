@@ -179,7 +179,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
           catch (error) {
             if (!shouldShrinkRepositoryBatch(error))
               throw error
-            console.debug(`metrics/compute/${login}/base > received an empty or timed out response while retrieving ${requested} repositories after ${cursor}, halving batch`)
+            console.debug(`metrics/compute/${login}/base > received an empty, timed out, or resource-limited response while retrieving ${requested} repositories after ${cursor}, halving batch`)
             _batch = Math.floor(requested / 2)
             if (_batch < 1) {
               console.debug(`metrics/compute/${login}/base > failed to retrieve repositories, cannot halve batch anymore`)
@@ -244,7 +244,7 @@ function shouldShrinkRepositoryBatch(error) {
   const status = Number(error?.status ?? error?.response?.status)
   if ([403, 429].includes(status))
     return false
-  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)
+  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query|resource limits? for this query exceeded/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)
 }
 
 //Query post-processing
