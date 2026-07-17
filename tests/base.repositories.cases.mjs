@@ -11,27 +11,56 @@ function repository(index) {
   }
 }
 
-async function loadRepositories({repositories, totalCount, emptyFirstPage = false}) {
+async function loadRepositories({repositories, totalCount, emptyFirstPage = false, repositoryError = null, contributionError = null, indepth = false}) {
   const calls = []
+  const contributionCalls = []
   let returnedEmptyPage = false
+  let returnedRepositoryError = false
   const data = {base: {}}
   const queries = {
     base: {
       user: () => ({kind: "user"}),
       "user.x": () => ({kind: "user.x"}),
+      contributions: options => ({kind: "contributions", ...options}),
       repositories: options => ({kind: "repositories", ...options}),
     },
   }
   const graphql = async query => {
     if (query.kind === "user")
-      return {user: {createdAt: "2020-01-01T00:00:00.000Z"}}
+      return {user: {createdAt: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString()}}
     if (query.kind === "user.x") {
       return {
         user: {
-          contributionsCollection: {totalCommitContributions: 0},
+          contributionsCollection: {
+            totalRepositoriesWithContributedCommits: 0,
+            totalCommitContributions: 0,
+            restrictedContributionsCount: 0,
+            totalIssueContributions: 0,
+            totalPullRequestContributions: 0,
+            totalPullRequestReviewContributions: 0,
+          },
           packages: {totalCount: 0},
           repositories: {totalCount, totalDiskUsage: 0},
           repositoriesContributedTo: {totalCount: 0},
+        },
+      }
+    }
+    if (query.kind === "contributions") {
+      contributionCalls.push(query.field)
+      if (contributionError) {
+        contributionError.calls = contributionCalls
+        throw contributionError
+      }
+      return {
+        user: {
+          contributionsCollection: {
+            totalRepositoriesWithContributedCommits: 1,
+            totalCommitContributions: 1,
+            restrictedContributionsCount: 1,
+            totalIssueContributions: 1,
+            totalPullRequestContributions: 1,
+            totalPullRequestReviewContributions: 1,
+          },
         },
       }
     }
@@ -39,6 +68,11 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
       throw new Error(`Unexpected query: ${query.kind}`)
 
     calls.push({type: query.type, size: query.repositories, after: query.after})
+    if ((repositoryError) && (!returnedRepositoryError)) {
+      returnedRepositoryError = true
+      repositoryError.calls = calls
+      throw repositoryError
+    }
     if (query.type === "repositoriesContributedTo") {
       return {
         user: {
@@ -75,7 +109,7 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
         base: {
           extras: () => false,
           inputs: () => ({
-            indepth: false,
+            indepth,
             hireable: false,
             skip: false,
             "repositories.affiliations": ["owner"],
@@ -101,8 +135,10 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
     },
   }
 
+  imports.metadata.plugins.base.extras = name => (name === "indepth") && indepth
+
   await base({login, graphql, rest, data, q: {}, queries, imports}, conf)
-  return {calls, data}
+  return {calls, contributionCalls, data}
 }
 
 {
@@ -115,4 +151,37 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
   const {calls, data} = await loadRepositories({repositories: 20, totalCount: 20, emptyFirstPage: true})
   assert.equal(data.user.repositories.nodes.length, 20)
   assert.deepEqual(calls.filter(({type}) => type === "repositories").map(({size}) => size), [20, 10, 10])
+}
+
+{
+  const error = Object.assign(new Error("You have exceeded a secondary rate limit"), {
+    status: 403,
+    response: {headers: {"retry-after": "60"}},
+  })
+  await assert.rejects(loadRepositories({repositories: 20, totalCount: 20, repositoryError: error}), candidate => candidate === error)
+  assert.deepEqual(error.calls.filter(({type}) => type === "repositories").map(({size}) => size), [20])
+}
+
+{
+  const error = Object.assign(new Error("You have exceeded a secondary rate limit"), {
+    status: 403,
+    response: {headers: {"retry-after": "60"}},
+  })
+  await assert.rejects(loadRepositories({repositories: 1, totalCount: 1, contributionError: error, indepth: true}), candidate => candidate === error)
+  assert.equal(error.calls.length, 1)
+}
+
+{
+  const fields = [
+    "totalRepositoriesWithContributedCommits",
+    "totalCommitContributions",
+    "restrictedContributionsCount",
+    "totalIssueContributions",
+    "totalPullRequestContributions",
+    "totalPullRequestReviewContributions",
+  ]
+  const {contributionCalls} = await loadRepositories({repositories: 1, totalCount: 1, indepth: true})
+  assert.equal(contributionCalls.length, 1)
+  for (const field of fields)
+    assert.match(contributionCalls[0], new RegExp(`(^|\\n)${field}($|\\n)`))
 }

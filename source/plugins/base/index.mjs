@@ -3,6 +3,9 @@
  * It populates initial data object directly instead of returning a result like others plugins
  */
 
+//Imports
+import {isSecondaryRateLimit} from "../../app/retry.mjs"
+
 //Setup
 export default async function({login, graphql, rest, data, q, queries, imports, callbacks}, conf) {
   //Load inputs
@@ -36,7 +39,9 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
         Object.assign(data.user, (await graphql(queries.base[`${account}.x`]({login, account, "calendar.from": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), "calendar.to": (new Date()).toISOString(), affiliations, forks})))[account])
         console.debug(`metrics/compute/${login}/base > successfully loaded bulk query`)
       }
-      catch {
+      catch (error) {
+        if (isSecondaryRateLimit(error))
+          throw error
         console.debug(`metrics/compute/${login}/base > failed to load bulk query, falling back to unit queries`)
         //Query basic fields
         const fields = {
@@ -47,7 +52,9 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
           try {
             Object.assign(data.user, (await graphql(queries.base.field({login, account, field})))[account])
           }
-          catch {
+          catch (error) {
+            if (isSecondaryRateLimit(error))
+              throw error
             console.debug(`metrics/compute/${login}/base > failed to retrieve ${field}`)
             data.user[field] = {totalCount: NaN}
           }
@@ -58,6 +65,8 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
             Object.assign(data.user.repositories, (await graphql(queries.base["field.repositories"]({login, account, field, affiliations, forks})))[account].repositories)
           }
           catch (error) {
+            if (isSecondaryRateLimit(error))
+              throw error
             console.debug(`metrics/compute/${login}/base > failed to retrieve repositories.${field}`)
             data.user.repositories[field] = NaN
           }
@@ -67,21 +76,24 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
           //Query contributions collection
           {
             const fields = ["totalRepositoriesWithContributedCommits", "totalCommitContributions", "restrictedContributionsCount", "totalIssueContributions", "totalPullRequestContributions", "totalPullRequestReviewContributions"]
-            for (const field of fields) {
-              try {
-                Object.assign(data.user.contributionsCollection, (await graphql(queries.base.contributions({login, account, field, range: ""})))[account].contributionsCollection)
-              }
-              catch {
-                console.debug(`metrics/compute/${login}/base > failed to retrieve contributionsCollection.${field}`)
+            try {
+              Object.assign(data.user.contributionsCollection, (await graphql(queries.base.contributions({login, account, field: fields.join("\n"), range: ""})))[account].contributionsCollection)
+            }
+            catch (error) {
+              if (isSecondaryRateLimit(error))
+                throw error
+              console.debug(`metrics/compute/${login}/base > failed to retrieve contributionsCollection fields`)
+              for (const field of fields)
                 data.user.contributionsCollection[field] = NaN
-              }
             }
           }
           //Query calendar
           try {
             Object.assign(data.user, (await graphql(queries.base.calendar({login, "calendar.from": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), "calendar.to": (new Date()).toISOString()})))[account])
           }
-          catch {
+          catch (error) {
+            if (isSecondaryRateLimit(error))
+              throw error
             console.debug(`metrics/compute/${login}/base > failed to retrieve contributions calendar`)
             data.user.calendar = {contributionCalendar: {weeks: []}}
           }
@@ -93,36 +105,37 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
           const fields = ["totalRepositoriesWithContributedCommits", "totalCommitContributions", "restrictedContributionsCount", "totalIssueContributions", "totalPullRequestContributions", "totalPullRequestReviewContributions"]
           const start = new Date(data.user.createdAt)
           const end = new Date()
-          const collection = {}
-          for (const field of fields) {
-            collection[field] = 0
-            //Load contribution calendar
-            for (let from = new Date(start); from < end;) {
-              //Set date range
-              let to = new Date(from)
-              to.setUTCHours(+6 * 4 * 7 * 24)
-              if (to > end)
-                to = end
-              //Ensure that date ranges are not overlapping by setting it to previous day at 23:59:59.999
-              const dto = new Date(to)
-              dto.setUTCHours(-1)
-              dto.setUTCMinutes(59)
-              dto.setUTCSeconds(59)
-              dto.setUTCMilliseconds(999)
-              //Fetch data from api
-              try {
-                console.debug(`metrics/compute/${login}/plugins > base > loading contributions collections for ${field} from "${from.toISOString()}" to "${dto.toISOString()}"`)
-                const {[account]: {contributionsCollection}} = await graphql(queries.base.contributions({login, account, field, range: `(from: "${from.toISOString()}", to: "${dto.toISOString()}")`}))
+          const collection = Object.fromEntries(fields.map(field => [field, 0]))
+          //Load contribution calendar
+          for (let from = new Date(start); from < end;) {
+            //Set date range
+            let to = new Date(from)
+            to.setUTCHours(+6 * 4 * 7 * 24)
+            if (to > end)
+              to = end
+            //Ensure that date ranges are not overlapping by setting it to previous day at 23:59:59.999
+            const dto = new Date(to)
+            dto.setUTCHours(-1)
+            dto.setUTCMinutes(59)
+            dto.setUTCSeconds(59)
+            dto.setUTCMilliseconds(999)
+            //Fetch all contribution fields from the same date window
+            try {
+              console.debug(`metrics/compute/${login}/plugins > base > loading contributions collections from "${from.toISOString()}" to "${dto.toISOString()}"`)
+              const {[account]: {contributionsCollection}} = await graphql(queries.base.contributions({login, account, field: fields.join("\n"), range: `(from: "${from.toISOString()}", to: "${dto.toISOString()}")`}))
+              for (const field of fields)
                 collection[field] += contributionsCollection[field]
-              }
-              catch {
-                console.debug(`metrics/compute/${login}/plugins > base > failed to load contributions collections for ${field} from "${from.toISOString()}" to "${dto.toISOString()}"`)
-              }
-              //Set next date range start
-              from = new Date(to)
             }
-            data.user.contributionsCollection[field] = Math.max(collection[field], data.user.contributionsCollection[field])
+            catch (error) {
+              if (isSecondaryRateLimit(error))
+                throw error
+              console.debug(`metrics/compute/${login}/plugins > base > failed to load contributions collections from "${from.toISOString()}" to "${dto.toISOString()}"`)
+            }
+            //Set next date range start
+            from = new Date(to)
           }
+          for (const field of fields)
+            data.user.contributionsCollection[field] = Math.max(collection[field], data.user.contributionsCollection[field])
         }
         //Fallback to load whole commit history rather than last year
         else {
@@ -159,12 +172,14 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
             const request = await graphql(queries.base.repositories({login, account, type, after: cursor ? `after: "${cursor}"` : "", repositories: requested, ...options}))
             connection = request?.[account]?.[type]
             if (!connection)
-              throw new Error(`Missing ${account}.${type} in GraphQL response`)
+              throw repositoryResponseError(`Missing ${account}.${type} in GraphQL response`)
             if ((!connection.nodes?.length) && (knownTotal) && (data.user[type].nodes.length < target))
-              throw new Error(`Unexpected empty ${account}.${type} in GraphQL response`)
+              throw repositoryResponseError(`Unexpected empty ${account}.${type} in GraphQL response`)
           }
           catch (error) {
-            console.debug(`metrics/compute/${login}/base > failed to retrieve ${requested} repositories after ${cursor}, this is probably due to an API timeout, halving batch`)
+            if (!shouldShrinkRepositoryBatch(error))
+              throw error
+            console.debug(`metrics/compute/${login}/base > received an empty or timed out response while retrieving ${requested} repositories after ${cursor}, halving batch`)
             _batch = Math.floor(requested / 2)
             if (_batch < 1) {
               console.debug(`metrics/compute/${login}/base > failed to retrieve repositories, cannot halve batch anymore`)
@@ -219,6 +234,17 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
   console.debug(`metrics/compute/${login}/base > no more account type`)
   await callbacks?.plugin?.(login, "base", false, data).catch(error => console.debug(`metrics/compute/${login}/plugins/callbacks > base > ${error}`))
   throw new Error("user not found")
+}
+
+function repositoryResponseError(message) {
+  return Object.assign(new Error(message), {code: "METRICS_REPOSITORY_RESPONSE"})
+}
+
+function shouldShrinkRepositoryBatch(error) {
+  const status = Number(error?.status ?? error?.response?.status)
+  if ([403, 429].includes(status))
+    return false
+  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)
 }
 
 //Query post-processing

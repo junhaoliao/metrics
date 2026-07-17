@@ -12,6 +12,7 @@ import util from "util"
 import mocks from "../../../tests/mocks/index.mjs"
 import metrics from "../metrics/index.mjs"
 import presets from "../metrics/presets.mjs"
+import {withGraphqlRetries} from "../retry.mjs"
 import setup from "../metrics/setup.mjs"
 
 /**App */
@@ -58,6 +59,7 @@ export default async function({sandbox = false} = {}) {
   //Apply mocking if needed
   if (mock)
     Object.assign(api, await mocks(api))
+  api.graphql = withGraphqlRetries(api.graphql)
   //Custom user octokits sessions
   const authenticated = new Map()
   const uapi = session => {
@@ -66,7 +68,7 @@ export default async function({sandbox = false} = {}) {
     if (authenticated.has(session)) {
       const {login, token} = authenticated.get(session)
       console.debug(`metrics/app/session/${login} > authenticated with session ${session.substring(0, 6)}, using custom octokit`)
-      return {login, graphql: octokit.graphql.defaults({headers: {authorization: `token ${token}`}}), rest: new OctokitRest.Octokit({auth: token})}
+      return {login, graphql: withGraphqlRetries(octokit.graphql.defaults({headers: {authorization: `token ${token}`}})), rest: new OctokitRest.Octokit({auth: token})}
     }
     else if (session) {
       console.debug(`metrics/app/session > unknown session ${session.substring(0, 6)}, using default octokit`)

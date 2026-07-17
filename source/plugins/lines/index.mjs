@@ -1,3 +1,6 @@
+//Imports
+import {mapSettled} from "../../app/concurrency.mjs"
+
 //Setup
 export default async function({login, data, imports, rest, q, account}, {enabled = false, extras = false} = {}) {
   //Plugin execution
@@ -27,7 +30,7 @@ export default async function({login, data, imports, rest, q, account}, {enabled
     const repos = {}, weeks = {}
     let response = []
     for (let i = 0; i < (delay ? 2 : 1); i++) {
-      response = [...await Promise.allSettled(repositories.map(async ({repo, owner}) => imports.filters.repo(`${owner}/${repo}`, skipped) ? {handle: `${owner}/${repo}`, stats: (await rest.repos.getContributorsStats({owner, repo})).data} : {}))].filter(({status}) => status === "fulfilled").map((
+      response = [...await mapSettled(repositories, async ({repo, owner}) => imports.filters.repo(`${owner}/${repo}`, skipped) ? {handle: `${owner}/${repo}`, stats: (await rest.repos.getContributorsStats({owner, repo})).data} : {}, {concurrency: 8})].filter(({status}) => status === "fulfilled").map((
         {value},
       ) => value)
       if ((delay) && (!i)) {

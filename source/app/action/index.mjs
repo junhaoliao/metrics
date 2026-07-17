@@ -10,6 +10,7 @@ import util from "util"
 import mocks from "../../../tests/mocks/index.mjs"
 import metrics from "../metrics/index.mjs"
 import presets from "../metrics/presets.mjs"
+import {retry, wait, withGraphqlRetries} from "../retry.mjs"
 import setup from "../metrics/setup.mjs"
 process.on("unhandledRejection", error => {
   throw error
@@ -42,33 +43,6 @@ info.group = ({metadata, name, inputs}) => {
     info(metadata.plugins[name]?.inputs[input]?.description?.split("\n")[0] ?? metadata.plugins[name]?.inputs[input]?.description ?? input, `${input in preset ? "*" : ""}${value}`, {token: metadata.plugins[name]?.inputs[input]?.type === "token"})
 }
 info.break = () => console.log("─".repeat(88))
-
-//Waiter
-async function wait(seconds) {
-  await new Promise(solve => setTimeout(solve, seconds * 1000))
-}
-
-//Retry wrapper
-async function retry(func, {retries = 1, delay = 0} = {}) {
-  let error = null
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      console.debug(`::group::Attempt ${attempt}/${retries}`)
-      const result = await func()
-      console.debug("::endgroup::")
-      return result
-    }
-    catch (_error) {
-      error = _error
-      console.debug("::endgroup::")
-      console.debug(`::warning::${error.message}`)
-      await wait(delay)
-    }
-  }
-  if (error)
-    throw error
-  return null
-}
 
 //Process exit
 function quit(reason) {
@@ -225,6 +199,7 @@ function quit(reason) {
         info("Token validity", "(could not verify)")
       }
     }
+    api.graphql = withGraphqlRetries(api.graphql)
     //Extract octokits
     const {graphql, rest} = api
 
