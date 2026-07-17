@@ -29,6 +29,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
 
   //Iterate through account types
   for (const account of ["user", "organization"]) {
+    let repositoriesContributedUnavailable = false
     try {
       //Query data from GitHub API
       console.debug(`metrics/compute/${login}/base > account ${account}`)
@@ -45,7 +46,7 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
         console.debug(`metrics/compute/${login}/base > failed to load bulk query, falling back to unit queries`)
         //Query basic fields
         const fields = {
-          user: ["packages", "starredRepositories", "watching", "sponsorshipsAsSponsor", "sponsorshipsAsMaintainer", "followers", "following", "issueComments", "organizations", "repositoriesContributedTo(includeUserRepositories: true)"],
+          user: ["packages", "starredRepositories", "watching", "sponsorshipsAsSponsor", "sponsorshipsAsMaintainer", "followers", "following", "issueComments", "organizations"],
           organization: ["packages", "sponsorshipsAsSponsor", "sponsorshipsAsMaintainer", "membersWithRole"],
         }[account] ?? []
         for (const field of fields) {
@@ -97,6 +98,19 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
             console.debug(`metrics/compute/${login}/base > failed to retrieve contributions calendar`)
             data.user.calendar = {contributionCalendar: {weeks: []}}
           }
+        }
+      }
+      //Query repositories contributed to separately because GitHub can reject this field on large accounts
+      if (account === "user") {
+        try {
+          Object.assign(data.user, (await graphql(queries.base.field({login, account, field: "repositoriesContributedTo(includeUserRepositories: true)"})))[account])
+        }
+        catch (error) {
+          if (isSecondaryRateLimit(error))
+            throw error
+          repositoriesContributedUnavailable = isRepositoryResourceLimit(error)
+          console.debug(`metrics/compute/${login}/base > failed to retrieve repositoriesContributedTo.totalCount`)
+          data.user.repositoriesContributedTo.totalCount = NaN
         }
       }
       //Query contributions collection over account lifetime instead of last year
@@ -156,6 +170,10 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
       }
       //Query repositories from GitHub API
       for (const type of ({user: ["repositories", "repositoriesContributedTo"], organization: ["repositories"]}[account] ?? [])) {
+        if ((type === "repositoriesContributedTo") && (repositoriesContributedUnavailable)) {
+          console.debug(`metrics/compute/${login}/base > repositoriesContributedTo is unavailable due to GitHub query resource limits, skipping`)
+          continue
+        }
         //Iterate through repositories
         let cursor = null
         const options = {repositories: {forks, affiliations, constraints: ""}, repositoriesContributedTo: {forks: "", affiliations: "", constraints: ", includeUserRepositories: false, contributionTypes: COMMIT"}}[type] ?? null
@@ -180,11 +198,16 @@ export default async function({login, graphql, rest, data, q, queries, imports, 
             if (!shouldShrinkRepositoryBatch(error))
               throw error
             console.debug(`metrics/compute/${login}/base > received an empty, timed out, or resource-limited response while retrieving ${requested} repositories after ${cursor}, halving batch`)
-            _batch = Math.floor(requested / 2)
-            if (_batch < 1) {
+            const reduced = Math.floor(requested / 2)
+            if (reduced < 1) {
+              if ((type === "repositoriesContributedTo") && (isRepositoryResourceLimit(error))) {
+                console.debug(`metrics/compute/${login}/base > repositoriesContributedTo remains unavailable with a batch of 1, skipping`)
+                break
+              }
               console.debug(`metrics/compute/${login}/base > failed to retrieve repositories, cannot halve batch anymore`)
               throw error
             }
+            _batch = reduced
             continue
           }
           const {edges = [], nodes = [], pageInfo = {}} = connection
@@ -244,7 +267,11 @@ function shouldShrinkRepositoryBatch(error) {
   const status = Number(error?.status ?? error?.response?.status)
   if ([403, 429].includes(status))
     return false
-  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query|resource limits? for this query exceeded/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)
+  return (error?.code === "METRICS_REPOSITORY_RESPONSE") || ([502, 504].includes(status)) || /timed? ?out|timeout|something went wrong while executing your query/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`) || isRepositoryResourceLimit(error)
+}
+
+function isRepositoryResourceLimit(error) {
+  return error?.errors?.some(({type, message}) => (type === "RESOURCE_LIMITS_EXCEEDED") || /resource limits? for this query exceeded/i.test(message)) || /resource limits? for this query exceeded/i.test(error?.message)
 }
 
 //Query post-processing
@@ -257,6 +284,7 @@ const postprocess = {
       isHireable: false,
       isVerified: false,
       repositories: {},
+      repositoriesContributedTo: {totalCount: NaN, nodes: []},
       contributionsCollection: {},
     })
   },

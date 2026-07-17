@@ -11,7 +11,7 @@ function repository(index) {
   }
 }
 
-async function loadRepositories({repositories, totalCount, emptyFirstPage = false, repositoryError = null, contributionError = null, indepth = false}) {
+async function loadRepositories({repositories, totalCount, emptyFirstPage = false, repositoryError = null, repositoryErrorType = null, repositoryErrorAlways = false, contributedCountError = null, contributionError = null, indepth = false}) {
   const calls = []
   const contributionCalls = []
   let returnedEmptyPage = false
@@ -21,6 +21,7 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
     base: {
       user: () => ({kind: "user"}),
       "user.x": () => ({kind: "user.x"}),
+      field: options => ({kind: "field", ...options}),
       contributions: options => ({kind: "contributions", ...options}),
       repositories: options => ({kind: "repositories", ...options}),
     },
@@ -41,9 +42,13 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
           },
           packages: {totalCount: 0},
           repositories: {totalCount, totalDiskUsage: 0},
-          repositoriesContributedTo: {totalCount: 0},
         },
       }
+    }
+    if (query.kind === "field") {
+      if (contributedCountError)
+        throw contributedCountError
+      return {user: {repositoriesContributedTo: {totalCount: 0}}}
     }
     if (query.kind === "contributions") {
       contributionCalls.push(query.field)
@@ -68,7 +73,7 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
       throw new Error(`Unexpected query: ${query.kind}`)
 
     calls.push({type: query.type, size: query.repositories, after: query.after})
-    if ((repositoryError) && (!returnedRepositoryError)) {
+    if ((repositoryError) && ((!repositoryErrorType) || (query.type === repositoryErrorType)) && ((repositoryErrorAlways) || (!returnedRepositoryError))) {
       returnedRepositoryError = true
       repositoryError.calls = calls
       throw repositoryError
@@ -167,6 +172,23 @@ async function loadRepositories({repositories, totalCount, emptyFirstPage = fals
   const {calls, data} = await loadRepositories({repositories: 20, totalCount: 20, repositoryError: error})
   assert.equal(data.user.repositories.nodes.length, 20)
   assert.deepEqual(calls.filter(({type}) => type === "repositories").map(({size}) => size), [20, 10, 10])
+}
+
+{
+  const error = new Error("Request failed due to following response errors: Resource limits for this query exceeded.")
+  const {calls, data} = await loadRepositories({repositories: 20, totalCount: 20, repositoryError: error, repositoryErrorType: "repositoriesContributedTo", repositoryErrorAlways: true})
+  assert.equal(data.user.repositories.nodes.length, 20)
+  assert.deepEqual(data.user.repositoriesContributedTo.nodes, [])
+  assert.deepEqual(calls.filter(({type}) => type === "repositoriesContributedTo").map(({size}) => size), [20, 10, 5, 2, 1])
+}
+
+{
+  const error = new Error("Request failed due to following response errors: Resource limits for this query exceeded.")
+  const {calls, data} = await loadRepositories({repositories: 20, totalCount: 20, contributedCountError: error})
+  assert.equal(data.user.repositories.nodes.length, 20)
+  assert.deepEqual(data.user.repositoriesContributedTo.nodes, [])
+  assert.equal(Number.isNaN(data.user.repositoriesContributedTo.totalCount), true)
+  assert.equal(calls.some(({type}) => type === "repositoriesContributedTo"), false)
 }
 
 {

@@ -27,9 +27,6 @@ query BaseUserX {
     organizations {
       totalCount
     }
-    repositoriesContributedTo(includeUserRepositories: true) {
-      totalCount
-    }
     repositories(last: 0 $affiliations $forks) {
       totalCount
       totalDiskUsage
