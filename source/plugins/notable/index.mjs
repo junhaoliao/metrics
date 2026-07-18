@@ -1,6 +1,14 @@
 //Imports
 import {isGraphqlResourceLimit} from "../../app/retry.mjs"
 
+const CONTRIBUTION_FIELDS = {
+  commit: "commitContributionsByRepository",
+  issue: "issueContributionsByRepository",
+  pull_request: "pullRequestContributionsByRepository",
+}
+const CONTRIBUTION_WINDOW = 24 * 7 * 24 * 60 * 60 * 1000
+const MAX_REPOSITORIES = 100
+
 //Setup
 export default async function({login, q, imports, rest, graphql, data, account, queries}, {enabled = false, extras = false} = {}) {
   //Plugin execution
@@ -26,14 +34,18 @@ export default async function({login, q, imports, rest, graphql, data, account, 
         }
         catch (error) {
           if (isGraphqlResourceLimit(error)) {
-            console.debug(`metrics/compute/${login}/plugins > notable > repositoriesContributedTo is unavailable due to GitHub query resource limits, skipping`)
-            return {contributions: [], types, unavailable: true}
+            console.debug(`metrics/compute/${login}/plugins > notable > repositoriesContributedTo is unavailable due to GitHub query resource limits, loading bounded contribution collections`)
+            const nodes = await loadContributedRepositories({login, graphql, query: queries.notable["contributions.fallback"], types, createdAt: data.user.createdAt})
+            response = {user: {repositoriesContributedTo: {edges: nodes.map(node => ({node}))}}}
           }
-          throw error
+          else {
+            throw error
+          }
         }
         const {user: {repositoriesContributedTo: {edges}}} = response
         cursor = edges?.[edges?.length - 1]?.cursor
         edges
+          .filter(({node}) => self || (node.owner.login.toLocaleLowerCase() !== login.toLocaleLowerCase()))
           .filter(({node}) => imports.filters.repo(node, skipped))
           .filter(({node}) => ({all: true, organization: node.isInOrganization, user: !node.isInOrganization}[from]))
           .filter(({node}) => imports.filters.github(filter, {name: node.nameWithOwner, user: node.owner.login, stars: node.stargazers.totalCount, watchers: node.watchers.totalCount, forks: node.forks.totalCount}))
@@ -158,4 +170,75 @@ export default async function({login, q, imports, rest, graphql, data, account, 
   catch (error) {
     throw imports.format.error(error)
   }
+}
+
+async function loadContributedRepositories({login, graphql, query, types, createdAt}) {
+  const repositories = new Map()
+  const end = new Date()
+  for (let from = new Date(createdAt); from < end;) {
+    const next = new Date(Math.min(from.getTime() + CONTRIBUTION_WINDOW, end.getTime()))
+    const to = new Date(next.getTime() - 1)
+    const nodes = await loadContributionRange({login, graphql, query, types, from, to})
+    for (const node of nodes)
+      repositories.set(node.nameWithOwner.toLocaleLowerCase(), node)
+    from = next
+  }
+  return [...repositories.values()].sort((a, b) => b.stargazers.totalCount - a.stargazers.totalCount)
+}
+
+async function loadContributionRange({login, graphql, query, types, from, to}) {
+  try {
+    console.debug(`metrics/compute/${login}/plugins > notable > loading bounded contributions from "${from.toISOString()}" to "${to.toISOString()}"`)
+    const response = await graphql(query({
+      login,
+      range: `(from: "${from.toISOString()}", to: "${to.toISOString()}")`,
+      contributions: contributionFields(types),
+    }))
+    const collection = response?.user?.contributionsCollection
+    if (!collection)
+      throw new Error("Incomplete notable contributions response")
+    const saturated = types.some(type => collection[CONTRIBUTION_FIELDS[type]]?.length >= MAX_REPOSITORIES)
+    if (saturated)
+      throw Object.assign(new Error("Notable contributions response reached the repository limit"), {code: "METRICS_NOTABLE_RESPONSE_LIMIT"})
+    return types.flatMap(type => collection[CONTRIBUTION_FIELDS[type]] ?? []).map(({repository}) => repository).filter(Boolean)
+  }
+  catch (error) {
+    const duration = to.getTime() - from.getTime()
+    if (((!isGraphqlResourceLimit(error)) && (error?.code !== "METRICS_NOTABLE_RESPONSE_LIMIT")) || (duration < 2 * 24 * 60 * 60 * 1000))
+      throw error
+    const midpoint = new Date(from.getTime() + Math.ceil(duration / 2))
+    console.debug(`metrics/compute/${login}/plugins > notable > contribution range was rejected or full, splitting at "${midpoint.toISOString()}"`)
+    return [
+      ...await loadContributionRange({login, graphql, query, types, from, to: new Date(midpoint.getTime() - 1)}),
+      ...await loadContributionRange({login, graphql, query, types, from: midpoint, to}),
+    ]
+  }
+}
+
+function contributionFields(types) {
+  return types.map(type => `${CONTRIBUTION_FIELDS[type]}(maxRepositories: ${MAX_REPOSITORIES}) {
+      repository {
+        isInOrganization
+        owner {
+          login
+          avatarUrl
+        }
+        nameWithOwner
+        watchers {
+          totalCount
+        }
+        forks {
+          totalCount
+        }
+        stargazers {
+          totalCount
+        }
+        issues {
+          totalCount
+        }
+        pullRequests {
+          totalCount
+        }
+      }
+    }`).join("\n")
 }
