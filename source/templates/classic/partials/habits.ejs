@@ -26,7 +26,7 @@
             <li>Has approximately <%= f(plugins.habits.lines.average.chars, {fixed:1}) %> characters per line of code written</li>
           <% } %>
           <% if (!Number.isNaN(plugins.habits.commits.hour)) { %>
-            <li>Mostly pushes code around <%= plugins.habits.commits.hour %>:00</li>
+            <li>Usually authors commits around <%= plugins.habits.commits.hour %>:00</li>
           <% } %>
           <% if (plugins.habits.commits.day) { %>
             <li>Mostly active on <%= plugins.habits.commits.day %></li>

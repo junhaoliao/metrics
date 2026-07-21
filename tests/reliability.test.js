@@ -15,3 +15,10 @@ test("notable contributions tolerate GitHub repository resource limits", () => {
     console.error(result.stdout, result.stderr)
   expect(result.status).toBe(0)
 })
+
+test("habits charts use bounded commit search instead of the events timeline", () => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "habits.commit-search.cases.mjs")], {encoding: "utf8"})
+  if (result.status !== 0)
+    console.error(result.stdout, result.stderr)
+  expect(result.status).toBe(0)
+})

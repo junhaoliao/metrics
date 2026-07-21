@@ -16,7 +16,8 @@ export default async function({login, data, rest, imports, q, account}, {enabled
 
     //Initialization
     const habits = {facts, charts, trim, lines: {average: {chars: 0}}, commits: {fetched: 0, hour: NaN, hours: {}, day: NaN, days: {}}, indents: {style: "", spaces: 0, tabs: 0}, linguist: {available: false, ordered: [], languages: {}}}
-    const pages = Math.ceil(from / 100)
+    //GitHub caps user event timelines at 300 entries
+    const pages = Math.min(Math.ceil(from / 100), 3)
     const offset = data.config.timezone?.offset ?? 0
 
     //Get user recent activity
@@ -34,19 +35,33 @@ export default async function({login, data, rest, imports, q, account}, {enabled
     console.debug(`metrics/compute/${login}/plugins > habits > ${events.length} events loaded`)
 
     //Get user recent commits
-    const commits = events
+    const pushes = events
       .filter(({type}) => type === "PushEvent")
       .filter(({actor}) => account === "organization" ? true : actor.login?.toLocaleLowerCase() === login.toLocaleLowerCase())
       .filter(({repo: {name: repo}}) => imports.filters.repo(repo, skipped))
       .filter(({created_at}) => new Date(created_at) > new Date(Date.now() - days * 24 * 60 * 60 * 1000))
-    console.debug(`metrics/compute/${login}/plugins > habits > filtered out ${commits.length} push events over last ${days} days`)
+    console.debug(`metrics/compute/${login}/plugins > habits > filtered out ${pushes.length} push events over last ${days} days`)
+
+    //Get commit timestamps independently from the capped events timeline
+    let commits = null
+    if (account === "user") {
+      try {
+        console.debug(`metrics/compute/${login}/plugins > habits > searching commits over last ${days} days`)
+        commits = await searchRecentCommits({login, rest, days, skipped, imports})
+        console.debug(`metrics/compute/${login}/plugins > habits > ${commits.length} commits loaded from search`)
+      }
+      catch (error) {
+        console.debug(`metrics/compute/${login}/plugins > habits > commit search unavailable, falling back to push events (${error})`)
+      }
+    }
+    commits ??= pushes.map(({created_at, repo: {name: repo}}) => ({created_at, repo}))
     habits.commits.fetched = commits.length
 
     //Retrieve edited files and filter edited lines (those starting with +/-) from patches
     console.debug(`metrics/compute/${login}/plugins > habits > loading patches`)
     const patches = [
       ...await Promise.allSettled(
-        commits
+        pushes
           .flatMap(({payload}) => payload.commits)
           .filter(commit => commit)
           .filter(({author}) => data.shared["commits.authoring"].filter(authoring => author?.login?.toLocaleLowerCase().includes(authoring) || author?.email?.toLocaleLowerCase().includes(authoring) || author?.name?.toLocaleLowerCase().includes(authoring)).length)
@@ -142,6 +157,50 @@ export default async function({login, data, rest, imports, q, account}, {enabled
   catch (error) {
     throw imports.format.error(error)
   }
+}
+
+/**Load recent commits from a bounded GitHub commit search */
+async function searchRecentCommits({login, rest, days, skipped, imports}) {
+  const now = new Date()
+  const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+  const author = `author:${login}`
+  let result = await searchCommits(rest, `${author} author-date:>=${since.toISOString().slice(0, 10)}`)
+
+  //GitHub caps each search at 1,000 results, so retry large ranges one day at a time
+  if (result.truncated) {
+    const items = []
+    const date = new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth(), since.getUTCDate()))
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    for (; date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
+      const daily = await searchCommits(rest, `${author} author-date:${date.toISOString().slice(0, 10)}`)
+      items.push(...daily.items)
+    }
+    result = {items}
+  }
+
+  const unique = new Map()
+  for (const item of result.items) {
+    const created_at = item.commit?.author?.date
+    const repo = item.repository?.full_name
+    if ((!item.sha) || (!created_at) || (!repo) || (new Date(created_at) <= since) || (new Date(created_at) > now) || (!imports.filters.repo(repo, skipped)))
+      continue
+    unique.set(item.sha, {created_at, repo})
+  }
+  return [...unique.values()]
+}
+
+/**Load all available pages for one commit search */
+async function searchCommits(rest, q) {
+  const options = {q, per_page: 100, sort: "author-date", order: "desc"}
+  const {data: first} = await rest.search.commits({...options, page: 1})
+  const items = [...(first.items ?? [])]
+  const total = Number(first.total_count) || 0
+  const pages = Math.min(Math.ceil(total / options.per_page), 10)
+  for (let page = 2; page <= pages; page++) {
+    const {data} = await rest.search.commits({...options, page})
+    items.push(...(data.items ?? []))
+  }
+  return {items, truncated: Boolean(first.incomplete_results) || (total > 1000)}
 }
 
 /**Initialize an empty object with values from 0 to n */
